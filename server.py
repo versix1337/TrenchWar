@@ -76,15 +76,15 @@ async def broadcast(code, msg):
 
 async def send_to(pid, msg):
     ws = player_ws.get(pid)
-    if ws and not ws.closed:
+    if ws is not None and not ws.closed:
         try:
             data = json.dumps(msg)
-            print(f"[SEND] to {pid}: {msg.get('type', '?')}", flush=True)
             await ws.send_str(data)
         except Exception as e:
             print(f"[SEND ERROR] to {pid}: {e}", flush=True)
     else:
-        print(f"[SEND FAIL] {pid} ws={'missing' if not ws else 'closed'}", flush=True)
+        closed = ws.closed if ws is not None else 'no_ws'
+        print(f"[SEND FAIL] {pid} ws_state={closed} keys={list(player_ws.keys())}", flush=True)
 
 async def game_loop(code):
     try:
@@ -226,21 +226,21 @@ async def websocket_handler(request):
                     state['players'][player_id] = create_player(player_id, 'allies')
                     sessions[code] = {'state': state, 'player_ids': [player_id]}
                     player_sessions[player_id] = code
-                    await send_to(player_id, {
+                    await ws.send_str(json.dumps({
                         'type': 'session_created',
                         'code': code,
                         'playerId': player_id,
                         'side': 'allies'
-                    })
+                    }))
 
                 elif msg['type'] == 'join_session':
                     code = msg.get('code', '')
                     session = sessions.get(code)
                     if not session:
-                        await send_to(player_id, {'type': 'error', 'message': 'Session not found'})
+                        await ws.send_str(json.dumps({'type': 'error', 'message': 'Session not found'}))
                         continue
                     if len(session['player_ids']) >= 2:
-                        await send_to(player_id, {'type': 'error', 'message': 'Session is full'})
+                        await ws.send_str(json.dumps({'type': 'error', 'message': 'Session is full'}))
                         continue
                     state = session['state']
                     state['players'][player_id] = create_player(player_id, 'axis')
@@ -249,12 +249,14 @@ async def websocket_handler(request):
                     state['started'] = True
                     # Notify both
                     for pid in session['player_ids']:
-                        await send_to(pid, {
-                            'type': 'game_start',
-                            'state': state,
-                            'playerId': pid,
-                            'side': state['players'][pid]['side']
-                        })
+                        target_ws = player_ws.get(pid)
+                        if target_ws and not target_ws.closed:
+                            await target_ws.send_str(json.dumps({
+                                'type': 'game_start',
+                                'state': state,
+                                'playerId': pid,
+                                'side': state['players'][pid]['side']
+                            }))
                     # Start loop
                     if code not in game_loops:
                         task = asyncio.ensure_future(game_loop(code))
@@ -264,7 +266,7 @@ async def websocket_handler(request):
                     found = False
                     for code, session in sessions.items():
                         if len(session['player_ids']) == 1 and not session['state']['started']:
-                            await send_to(player_id, {'type': 'match_found', 'code': code})
+                            await ws.send_str(json.dumps({'type': 'match_found', 'code': code}))
                             found = True
                             break
                     if not found:
@@ -273,12 +275,12 @@ async def websocket_handler(request):
                         state['players'][player_id] = create_player(player_id, 'allies')
                         sessions[code] = {'state': state, 'player_ids': [player_id]}
                         player_sessions[player_id] = code
-                        await send_to(player_id, {
+                        await ws.send_str(json.dumps({
                             'type': 'waiting_match',
                             'code': code,
                             'playerId': player_id,
                             'side': 'allies'
-                        })
+                        }))
 
                 elif msg['type'] == 'input':
                     code = player_sessions.get(player_id)
@@ -367,7 +369,12 @@ async def websocket_handler(request):
                     del sessions[code]
                 else:
                     for pid in session['player_ids']:
-                        await send_to(pid, {'type': 'player_left', 'playerId': player_id})
+                        target_ws = player_ws.get(pid)
+                        if target_ws and not target_ws.closed:
+                            try:
+                                await target_ws.send_str(json.dumps({'type': 'player_left', 'playerId': player_id}))
+                            except:
+                                pass
             del player_sessions[player_id]
         if player_id in player_ws:
             del player_ws[player_id]
