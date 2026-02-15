@@ -103,8 +103,11 @@ let explosions = [];
 let shellCasings = [];
 let dustParticles = [];
 let bloodSplats = [];
-let pendingState = null; // Track what we were doing: 'waiting_room', 'waiting_match', 'in_game', or null
-let currentRoomCode = null; // The room code we created/are waiting in
+let currentRoomCode = null;
+
+// Persistent client token — survives reconnects
+const clientToken = 'ct_' + Math.random().toString(36).substr(2, 12);
+console.log('Client token:', clientToken);
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -118,15 +121,10 @@ function connect() {
   ws = new WebSocket(wsUrl);
   ws.onopen = () => {
     console.log('Connected to server');
-    // If we were waiting in a room, re-create it
-    if (pendingState === 'waiting_room') {
-      console.log('Reconnected — re-creating room');
-      ws.send(JSON.stringify({ type: 'create_session' }));
-      document.getElementById('menuStatus').textContent = 'Reconnected — creating new room...';
-    } else if (pendingState === 'waiting_match') {
-      console.log('Reconnected — re-finding match');
-      ws.send(JSON.stringify({ type: 'find_match' }));
-      document.getElementById('menuStatus').textContent = 'Reconnected — searching again...';
+    // Try to rejoin existing session
+    if (currentRoomCode) {
+      console.log('Reconnected — rejoining session', currentRoomCode);
+      ws.send(JSON.stringify({ type: 'rejoin', token: clientToken }));
     } else {
       document.getElementById('menuStatus').textContent = 'Connected!';
       setTimeout(() => {
@@ -138,44 +136,29 @@ function connect() {
   };
   ws.onerror = (e) => {
     console.error('WebSocket error:', e);
-    document.getElementById('menuStatus').textContent = 'Connection error - retrying...';
   };
   ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
   ws.onclose = () => {
-    console.log('WebSocket closed. pendingState:', pendingState);
-    // If in game, go back to menu
-    if (gameActive) {
-      gameActive = false;
-      pendingState = null;
-      canvas.style.display = 'none';
-      document.getElementById('hud').style.display = 'none';
-      document.getElementById('menu').style.display = 'block';
-      document.getElementById('menuStatus').textContent = 'Disconnected. Reconnecting...';
-    } else if (pendingState === 'waiting_room' || pendingState === 'waiting_match') {
-      // Keep the waiting screen up — we'll re-create on reconnect
-      document.getElementById('menuStatus').textContent = 'Connection lost — reconnecting...';
-    } else {
-      document.getElementById('menu').style.display = 'block';
-      document.getElementById('menuStatus').textContent = 'Disconnected. Reconnecting...';
-    }
+    console.log('WebSocket closed. Reconnecting in 2s...');
+    // Don't change any UI — just reconnect silently
     setTimeout(connect, 2000);
   };
 }
 connect();
 
-// Keep WebSocket alive with periodic pings
+// Keep WebSocket alive
 setInterval(() => {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'ping' }));
   }
-}, 25000); // Every 25 seconds
+}, 20000);
 
 function handleMessage(msg) {
   switch (msg.type) {
     case 'session_created':
+    case 'waiting_match':
       myId = msg.playerId;
       mySide = msg.side;
-      pendingState = 'waiting_room';
       currentRoomCode = msg.code;
       document.getElementById('menu').style.display = 'none';
       document.getElementById('waiting').style.display = 'block';
@@ -184,16 +167,12 @@ function handleMessage(msg) {
       animateWaitDots();
       break;
 
-    case 'waiting_match':
-      myId = msg.playerId;
-      mySide = msg.side;
-      pendingState = 'waiting_match';
-      currentRoomCode = msg.code;
-      document.getElementById('menu').style.display = 'none';
-      document.getElementById('waiting').style.display = 'block';
-      document.getElementById('roomCode').textContent = msg.code;
-      document.getElementById('menuStatus').textContent = '';
-      animateWaitDots();
+    case 'rejoin_failed':
+      // Session gone, go back to menu
+      currentRoomCode = null;
+      document.getElementById('menu').style.display = 'block';
+      document.getElementById('waiting').style.display = 'none';
+      document.getElementById('menuStatus').textContent = 'Session expired. Create a new room.';
       break;
 
     case 'match_found':
@@ -205,8 +184,6 @@ function handleMessage(msg) {
       mySide = msg.side;
       gameState = msg.state;
       gameActive = true;
-      pendingState = 'in_game';
-      currentRoomCode = null;
       document.getElementById('menu').style.display = 'none';
       document.getElementById('waiting').style.display = 'none';
       canvas.style.display = 'block';
@@ -237,7 +214,6 @@ function handleMessage(msg) {
       document.getElementById('hudCenter').textContent = 'OPPONENT LEFT';
       setTimeout(() => {
         gameActive = false;
-        pendingState = null;
         currentRoomCode = null;
         canvas.style.display = 'none';
         document.getElementById('hud').style.display = 'none';
@@ -265,8 +241,7 @@ function animateWaitDots() {
 // ============ MENU ACTIONS ============
 function createSession() {
   if (ws.readyState !== 1) return;
-  pendingState = 'waiting_room';
-  ws.send(JSON.stringify({ type: 'create_session' }));
+  ws.send(JSON.stringify({ type: 'create_session', token: clientToken }));
   document.getElementById('menuStatus').textContent = 'Creating room...';
 }
 
@@ -276,15 +251,13 @@ function joinSession() {
     document.getElementById('menuStatus').textContent = 'Enter a 5-character code';
     return;
   }
-  pendingState = null; // Don't auto-recreate on disconnect for joining
-  ws.send(JSON.stringify({ type: 'join_session', code }));
+  ws.send(JSON.stringify({ type: 'join_session', code, token: clientToken }));
   document.getElementById('menuStatus').textContent = 'Joining...';
 }
 
 function findMatch() {
   if (ws.readyState !== 1) return;
-  pendingState = 'waiting_match';
-  ws.send(JSON.stringify({ type: 'find_match' }));
+  ws.send(JSON.stringify({ type: 'find_match', token: clientToken }));
   document.getElementById('menuStatus').textContent = 'Searching for opponent...';
 }
 
@@ -318,6 +291,7 @@ function sendInput() {
 
   ws.send(JSON.stringify({
     type: 'input',
+    token: clientToken,
     input: {
       left: keys['a'] || keys['arrowleft'],
       right: keys['d'] || keys['arrowright'],
