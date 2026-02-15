@@ -78,9 +78,13 @@ async def send_to(pid, msg):
     ws = player_ws.get(pid)
     if ws and not ws.closed:
         try:
-            await ws.send_str(json.dumps(msg))
-        except:
-            pass
+            data = json.dumps(msg)
+            print(f"[SEND] to {pid}: {msg.get('type', '?')}", flush=True)
+            await ws.send_str(data)
+        except Exception as e:
+            print(f"[SEND ERROR] to {pid}: {e}", flush=True)
+    else:
+        print(f"[SEND FAIL] {pid} ws={'missing' if not ws else 'closed'}", flush=True)
 
 async def game_loop(code):
     try:
@@ -204,6 +208,7 @@ async def websocket_handler(request):
     
     player_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=9))
     player_ws[player_id] = ws
+    print(f"[WS] Player {player_id} connected", flush=True)
     
     try:
         async for raw in ws:
@@ -212,6 +217,8 @@ async def websocket_handler(request):
                     msg = json.loads(raw.data)
                 except:
                     continue
+                
+                print(f"[MSG] {player_id}: {msg.get('type', '?')}", flush=True)
                 
                 if msg['type'] == 'create_session':
                     code = gen_code()
