@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRENCH WAR — WW2 Pixel Combat</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #c8b88a;
+    font-family: 'VT323', monospace;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    image-rendering: pixelated;
+  }
+  canvas { 
+    display: none; 
+    border: 3px solid #3a3020;
+    cursor: crosshair;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+
+<!-- MENU SCREEN -->
+<div id="menu" style="text-align:center;">
+  <div style="margin-bottom:30px;">
+    <h1 style="font-family:'Press Start 2P',monospace;font-size:28px;color:#c8a84a;text-shadow:3px 3px 0 #2a1a00, 0 0 20px rgba(200,168,74,0.3);letter-spacing:2px;margin-bottom:8px;">
+      ⚔ TRENCH WAR ⚔
+    </h1>
+    <p style="font-size:18px;color:#7a6a4a;">WW2 PIXEL COMBAT — 1v1 MULTIPLAYER</p>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:12px;align-items:center;">
+    <button onclick="findMatch()" style="font-family:'Press Start 2P',monospace;font-size:13px;padding:16px 40px;background:#3a5a2a;color:#d0e8a0;border:3px solid #5a8a3a;cursor:pointer;letter-spacing:1px;transition:all .15s;" 
+    onmouseover="this.style.background='#4a7a3a'" onmouseout="this.style.background='#3a5a2a'">
+      🎯 FIND MATCH
+    </button>
+
+    <button onclick="createSession()" style="font-family:'Press Start 2P',monospace;font-size:13px;padding:16px 40px;background:#4a3a1a;color:#c8b88a;border:3px solid #6a5a2a;cursor:pointer;letter-spacing:1px;transition:all .15s;"
+    onmouseover="this.style.background='#5a4a2a'" onmouseout="this.style.background='#4a3a1a'">
+      🏠 CREATE ROOM
+    </button>
+
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input id="codeInput" type="text" maxlength="5" placeholder="ENTER CODE" 
+        style="font-family:'Press Start 2P',monospace;font-size:13px;padding:14px 16px;width:200px;background:#1a1a12;color:#c8b88a;border:3px solid #3a3020;text-align:center;text-transform:uppercase;letter-spacing:4px;">
+      <button onclick="joinSession()" style="font-family:'Press Start 2P',monospace;font-size:13px;padding:14px 24px;background:#5a2a2a;color:#e8a0a0;border:3px solid #8a3a3a;cursor:pointer;"
+      onmouseover="this.style.background='#7a3a3a'" onmouseout="this.style.background='#5a2a2a'">
+        JOIN
+      </button>
+    </div>
+  </div>
+
+  <p id="menuStatus" style="margin-top:20px;font-size:16px;color:#8a7a5a;min-height:24px;"></p>
+
+  <div style="margin-top:40px;font-size:14px;color:#5a4a3a;line-height:2;">
+    <p>WASD / ARROWS — Move & Jump</p>
+    <p>MOUSE CLICK — Shoot</p>
+    <p>G — Grenade | R — Reload | C — Crouch</p>
+    <p>1/2/3 — Rifle / SMG / Sniper</p>
+  </div>
+</div>
+
+<!-- WAITING SCREEN -->
+<div id="waiting" style="display:none;text-align:center;">
+  <h2 style="font-family:'Press Start 2P',monospace;font-size:18px;color:#c8a84a;margin-bottom:20px;">WAITING FOR OPPONENT</h2>
+  <p style="font-size:20px;color:#8a7a5a;">Room Code:</p>
+  <p id="roomCode" style="font-family:'Press Start 2P',monospace;font-size:36px;color:#e8d8a0;letter-spacing:8px;margin:12px 0;text-shadow:0 0 15px rgba(232,216,160,0.4);"></p>
+  <p style="font-size:16px;color:#5a4a3a;">Share this code with a friend</p>
+  <div id="waitDots" style="font-size:24px;color:#6a5a3a;margin-top:20px;">...</div>
+</div>
+
+<!-- GAME CANVAS -->
+<canvas id="gameCanvas" width="1600" height="600"></canvas>
+
+<!-- HUD OVERLAY -->
+<div id="hud" style="display:none;position:fixed;top:0;left:0;right:0;padding:8px 16px;display:none;justify-content:space-between;align-items:center;font-family:'Press Start 2P',monospace;font-size:11px;pointer-events:none;z-index:10;">
+  <div id="hudLeft" style="color:#90c060;"></div>
+  <div id="hudCenter" style="color:#c8a84a;font-size:14px;"></div>
+  <div id="hudRight" style="color:#c06060;"></div>
+</div>
+
+<!-- KILL FEED -->
+<div id="killFeed" style="position:fixed;top:60px;right:16px;font-family:'VT323',monospace;font-size:16px;z-index:10;pointer-events:none;"></div>
+
+<script>
+// ============ CONNECTION ============
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+let ws = null;
+let myId = null;
+let mySide = null;
+let gameState = null;
+let gameActive = false;
+let explosions = [];
+let shellCasings = [];
+let dustParticles = [];
+let bloodSplats = [];
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const keys = {};
+let mouseDown = false;
+let mouseX = 0, mouseY = 0;
+
+function connect() {
+  ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+  ws.onopen = () => console.log('Connected to server');
+  ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+  ws.onclose = () => {
+    gameActive = false;
+    document.getElementById('menu').style.display = 'block';
+    document.getElementById('menuStatus').textContent = 'Disconnected. Reconnecting...';
+    setTimeout(connect, 2000);
+  };
+}
+connect();
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'session_created':
+    case 'waiting_match':
+      myId = msg.playerId;
+      mySide = msg.side;
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('waiting').style.display = 'block';
+      document.getElementById('roomCode').textContent = msg.code;
+      animateWaitDots();
+      break;
+
+    case 'match_found':
+      ws.send(JSON.stringify({ type: 'join_session', code: msg.code }));
+      break;
+
+    case 'game_start':
+      myId = msg.playerId;
+      mySide = msg.side;
+      gameState = msg.state;
+      gameActive = true;
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('waiting').style.display = 'none';
+      canvas.style.display = 'block';
+      document.getElementById('hud').style.display = 'flex';
+      resizeCanvas();
+      break;
+
+    case 'state':
+      gameState = msg.state;
+      break;
+
+    case 'explosion':
+      explosions.push({ x: msg.x, y: msg.y, frame: 0, maxFrame: 20 });
+      // Add dust
+      for (let i = 0; i < 12; i++) {
+        dustParticles.push({
+          x: msg.x + (Math.random() - 0.5) * 40,
+          y: msg.y + (Math.random() - 0.5) * 20,
+          vx: (Math.random() - 0.5) * 4,
+          vy: -Math.random() * 3,
+          life: 30 + Math.random() * 30,
+          size: 2 + Math.random() * 4,
+        });
+      }
+      break;
+
+    case 'player_left':
+      document.getElementById('hudCenter').textContent = 'OPPONENT LEFT';
+      setTimeout(() => {
+        gameActive = false;
+        canvas.style.display = 'none';
+        document.getElementById('hud').style.display = 'none';
+        document.getElementById('menu').style.display = 'block';
+        document.getElementById('menuStatus').textContent = 'Opponent disconnected';
+      }, 2000);
+      break;
+
+    case 'error':
+      document.getElementById('menuStatus').textContent = msg.message;
+      break;
+  }
+}
+
+let waitDotsInterval;
+function animateWaitDots() {
+  let dots = 0;
+  clearInterval(waitDotsInterval);
+  waitDotsInterval = setInterval(() => {
+    dots = (dots + 1) % 4;
+    document.getElementById('waitDots').textContent = '.'.repeat(dots + 1);
+  }, 500);
+}
+
+// ============ MENU ACTIONS ============
+function createSession() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'create_session' }));
+  document.getElementById('menuStatus').textContent = 'Creating room...';
+}
+
+function joinSession() {
+  const code = document.getElementById('codeInput').value.trim().toUpperCase();
+  if (code.length !== 5) {
+    document.getElementById('menuStatus').textContent = 'Enter a 5-character code';
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'join_session', code }));
+  document.getElementById('menuStatus').textContent = 'Joining...';
+}
+
+function findMatch() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'find_match' }));
+  document.getElementById('menuStatus').textContent = 'Searching for opponent...';
+}
+
+// ============ INPUT ============
+document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener('mousedown', e => { mouseDown = true; updateMouse(e); });
+canvas.addEventListener('mouseup', () => { mouseDown = false; });
+canvas.addEventListener('mousemove', updateMouse);
+
+function updateMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  mouseX = (e.clientX - rect.left) * scaleX;
+  mouseY = (e.clientY - rect.top) * scaleY;
+}
+
+function sendInput() {
+  if (!gameActive || !ws || ws.readyState !== 1) return;
+  const me = gameState?.players?.[myId];
+  if (!me) return;
+
+  // Determine facing from mouse
+  let facing = mouseX > me.x ? 'right' : 'left';
+
+  let weapon = null;
+  if (keys['1']) weapon = 'rifle';
+  if (keys['2']) weapon = 'smg';
+  if (keys['3']) weapon = 'sniper';
+
+  ws.send(JSON.stringify({
+    type: 'input',
+    input: {
+      left: keys['a'] || keys['arrowleft'],
+      right: keys['d'] || keys['arrowright'],
+      jump: keys['w'] || keys['arrowup'] || keys[' '],
+      crouch: keys['s'] || keys['arrowdown'] || keys['c'],
+      shoot: mouseDown,
+      grenade: keys['g'],
+      reload: keys['r'],
+      weapon,
+    }
+  }));
+  // Reset single-fire keys
+  keys['g'] = false;
+}
+setInterval(sendInput, 1000 / 30);
+
+// ============ RENDERING ============
+function resizeCanvas() {
+  const aspect = 1600 / 600;
+  let w = window.innerWidth;
+  let h = window.innerHeight - 20;
+  if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+
+// Trench layout data (must match server)
+const trenches = [
+  { x1: 60, x2: 180, side: 'allies' },
+  { x1: 350, x2: 450, side: 'allies' },
+  { x1: 700, x2: 900, side: 'neutral' },
+  { x1: 1150, x2: 1250, side: 'axis' },
+  { x1: 1420, x2: 1540, side: 'axis' },
+];
+
+// Color palette
+const PAL = {
+  sky1: '#4a6a8a',
+  sky2: '#7a9ab0',
+  ground: '#5a4a2a',
+  groundDark: '#3a2a1a',
+  groundLight: '#6a5a3a',
+  mud: '#4a3a1a',
+  trenchWall: '#3a2a10',
+  trenchFloor: '#2a1a08',
+  sandbag: '#8a7a5a',
+  sandbagDark: '#6a5a3a',
+  wire: '#5a5a5a',
+  alliedUniform: '#4a5a3a',
+  alliedHelmet: '#3a4a2a',
+  axisUniform: '#5a5a5a',
+  axisHelmet: '#4a4a3a',
+  skin: '#d0a878',
+  blood: '#8a2020',
+  muzzleFlash: '#ffa830',
+  bullet: '#ffdd44',
+  explosion1: '#ff6620',
+  explosion2: '#ffaa30',
+  explosion3: '#ffdd60',
+};
+
+function drawPixelRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+}
+
+function drawSky() {
+  // Gradient sky
+  const grad = ctx.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, '#2a3a4a');
+  grad.addColorStop(0.5, PAL.sky1);
+  grad.addColorStop(1, PAL.sky2);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1600, 420);
+
+  // Clouds
+  ctx.fillStyle = 'rgba(180,180,170,0.15)';
+  const tick = gameState?.tick || 0;
+  for (let i = 0; i < 6; i++) {
+    const cx = ((i * 300 + tick * 0.3) % 1800) - 100;
+    const cy = 60 + i * 30;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 60 + i * 10, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Smoke/haze near horizon
+  ctx.fillStyle = 'rgba(100,90,70,0.2)';
+  ctx.fillRect(0, 350, 1600, 70);
+}
+
+function drawGround() {
+  // Main ground
+  drawPixelRect(0, 400, 1600, 200, PAL.ground);
+  // Ground texture
+  for (let x = 0; x < 1600; x += 4) {
+    if (Math.random() < 0.3) {
+      drawPixelRect(x, 400, 4, 2, PAL.groundLight);
+    }
+    if (Math.random() < 0.2) {
+      drawPixelRect(x, 402 + Math.floor(Math.random() * 8), 2, 2, PAL.groundDark);
+    }
+  }
+  // Mud patches
+  for (let i = 0; i < 20; i++) {
+    const mx = (i * 83 + 17) % 1600;
+    drawPixelRect(mx, 400, 12 + (i % 5) * 4, 3, PAL.mud);
+  }
+}
+
+function drawTrenches() {
+  for (const t of trenches) {
+    const w = t.x2 - t.x1;
+    // Trench dug-out (lowered ground)
+    drawPixelRect(t.x1, 400, w, 30, PAL.trenchFloor);
+    // Trench walls
+    drawPixelRect(t.x1, 390, 6, 40, PAL.trenchWall);
+    drawPixelRect(t.x2 - 6, 390, 6, 40, PAL.trenchWall);
+    // Wall texture
+    for (let y = 392; y < 428; y += 6) {
+      drawPixelRect(t.x1 + 1, y, 4, 2, PAL.groundDark);
+      drawPixelRect(t.x2 - 5, y, 4, 2, PAL.groundDark);
+    }
+    // Sandbags on top
+    for (let sx = t.x1; sx < t.x2; sx += 14) {
+      drawPixelRect(sx, 388, 12, 6, PAL.sandbag);
+      drawPixelRect(sx + 1, 389, 10, 4, PAL.sandbagDark);
+      // Gap for shooting
+      if ((sx - t.x1) % 28 === 14) {
+        drawPixelRect(sx, 388, 12, 6, PAL.trenchFloor);
+      }
+    }
+    // Sandbag row behind
+    for (let sx = t.x1 + 7; sx < t.x2; sx += 14) {
+      drawPixelRect(sx, 383, 12, 6, PAL.sandbag);
+    }
+  }
+}
+
+function drawBarbedWire() {
+  ctx.strokeStyle = PAL.wire;
+  ctx.lineWidth = 1;
+  // Wire between trenches
+  const wirePositions = [250, 550, 650, 1050, 1350];
+  for (const wx of wirePositions) {
+    // Posts
+    drawPixelRect(wx, 380, 2, 20, '#4a4a3a');
+    drawPixelRect(wx + 30, 380, 2, 20, '#4a4a3a');
+    // Wire strands
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      ctx.moveTo(wx, 385 + i * 5);
+      for (let x = wx; x < wx + 30; x += 4) {
+        ctx.lineTo(x + 2, 383 + i * 5 + (x % 8 < 4 ? 3 : -1));
+      }
+    }
+    ctx.stroke();
+    // Barbs
+    ctx.fillStyle = PAL.wire;
+    for (let x = wx; x < wx + 30; x += 6) {
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(x, 384 + i * 5, 1, 2);
+      }
+    }
+  }
+}
+
+function drawSoldier(p) {
+  if (!p.alive) {
+    // Dead soldier on ground
+    ctx.fillStyle = p.side === 'allies' ? PAL.alliedUniform : PAL.axisUniform;
+    drawPixelRect(p.x - 10, 396, 20, 6, ctx.fillStyle);
+    drawPixelRect(p.x - 6, 394, 6, 4, PAL.skin);
+    return;
+  }
+
+  const isMe = p.id === myId;
+  const uniform = p.side === 'allies' ? PAL.alliedUniform : PAL.axisUniform;
+  const helmet = p.side === 'allies' ? PAL.alliedHelmet : PAL.axisHelmet;
+  const dir = p.facing === 'right' ? 1 : -1;
+  const crouch = p.crouching ? 8 : 0;
+  const bob = Math.sin((gameState?.tick || 0) * 0.15) * (Math.abs(p.vx) > 0 ? 1.5 : 0);
+  const baseY = p.y + bob;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + 2, 8, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (p.crouching) {
+    // Crouching pose
+    // Legs
+    drawPixelRect(p.x - 4, baseY - 4, 8, 4, uniform);
+    // Body
+    drawPixelRect(p.x - 3, baseY - 10, 6, 8, uniform);
+    // Head
+    drawPixelRect(p.x - 3, baseY - 15, 6, 6, PAL.skin);
+    // Helmet
+    drawPixelRect(p.x - 4, baseY - 17, 8, 4, helmet);
+    // Gun
+    drawPixelRect(p.x + dir * 4, baseY - 10, dir * 12, 2, '#4a4a4a');
+  } else {
+    // Standing pose
+    // Boots
+    drawPixelRect(p.x - 3, baseY - 3, 3, 3, '#2a1a0a');
+    drawPixelRect(p.x + 1, baseY - 3, 3, 3, '#2a1a0a');
+    // Legs
+    drawPixelRect(p.x - 3, baseY - 8, 3, 6, uniform);
+    drawPixelRect(p.x + 1, baseY - 8, 3, 6, uniform);
+    // Walking animation
+    if (Math.abs(p.vx) > 0) {
+      const step = Math.sin((gameState?.tick || 0) * 0.2) * 2;
+      drawPixelRect(p.x - 3, baseY - 8 + step, 3, 6, uniform);
+      drawPixelRect(p.x + 1, baseY - 8 - step, 3, 6, uniform);
+    }
+    // Body / torso
+    drawPixelRect(p.x - 4, baseY - 18, 8, 11, uniform);
+    // Belt
+    drawPixelRect(p.x - 4, baseY - 10, 8, 2, '#3a2a1a');
+    // Arms
+    drawPixelRect(p.x - 5, baseY - 17, 2, 6, uniform);
+    drawPixelRect(p.x + 3, baseY - 17, 2, 6, uniform);
+    // Hands
+    drawPixelRect(p.x + dir * 5, baseY - 15, 2, 2, PAL.skin);
+    // Head
+    drawPixelRect(p.x - 3, baseY - 24, 6, 6, PAL.skin);
+    // Eyes
+    drawPixelRect(p.x + dir * 1, baseY - 22, 1, 1, '#1a1a1a');
+    // Helmet
+    drawPixelRect(p.x - 4, baseY - 26, 8, 4, helmet);
+    // Helmet rim
+    drawPixelRect(p.x - 5, baseY - 23, 10, 1, helmet);
+    // Gun
+    const gunLen = p.weapon === 'sniper' ? 18 : p.weapon === 'smg' ? 10 : 14;
+    drawPixelRect(p.x + dir * 5, baseY - 16, dir * gunLen, 2, '#3a3a3a');
+    drawPixelRect(p.x + dir * 5, baseY - 15, dir * 2, 3, '#5a4a3a'); // stock
+  }
+
+  // Muzzle flash
+  if (p.shooting || (Date.now() - p.lastShot < 80)) {
+    const flashX = p.x + dir * (p.crouching ? 16 : 20);
+    const flashY = p.crouching ? baseY - 10 : baseY - 16;
+    drawPixelRect(flashX, flashY - 2, dir * 6, 4, PAL.muzzleFlash);
+    drawPixelRect(flashX + dir * 2, flashY - 3, dir * 3, 6, '#ffff80');
+  }
+
+  // Name tag and health
+  if (isMe) {
+    // Green arrow above head
+    ctx.fillStyle = '#80ff80';
+    const arrowY = baseY - (p.crouching ? 20 : 30);
+    ctx.beginPath();
+    ctx.moveTo(p.x, arrowY - 6);
+    ctx.lineTo(p.x - 4, arrowY);
+    ctx.lineTo(p.x + 4, arrowY);
+    ctx.fill();
+  }
+
+  // Health bar
+  const hbY = baseY - (p.crouching ? 22 : 32);
+  drawPixelRect(p.x - 10, hbY, 20, 3, '#1a1a1a');
+  const hpColor = p.health > 60 ? '#60a030' : p.health > 30 ? '#c0a020' : '#c02020';
+  drawPixelRect(p.x - 10, hbY, Math.floor(20 * p.health / 100), 3, hpColor);
+
+  // Reloading indicator
+  if (p.reloading) {
+    ctx.fillStyle = '#ffaa30';
+    ctx.font = '8px "Press Start 2P"';
+    ctx.fillText('RELOAD', p.x - 16, hbY - 4);
+  }
+}
+
+function drawProjectiles() {
+  if (!gameState) return;
+  for (const b of gameState.projectiles) {
+    // Bullet trail
+    ctx.fillStyle = PAL.bullet;
+    drawPixelRect(b.x, b.y, 4, 2, PAL.bullet);
+    // Tracer
+    ctx.fillStyle = 'rgba(255,220,100,0.4)';
+    drawPixelRect(b.x - b.vx * 2, b.y, 8, 1, ctx.fillStyle);
+  }
+}
+
+function drawGrenades() {
+  if (!gameState) return;
+  for (const g of gameState.grenades) {
+    // Grenade body
+    drawPixelRect(g.x - 3, g.y - 3, 6, 6, '#3a4a2a');
+    drawPixelRect(g.x - 2, g.y - 4, 4, 2, '#5a5a4a'); // pin area
+    // Flashing when about to explode
+    if (g.timer < 30 && g.timer % 6 < 3) {
+      drawPixelRect(g.x - 2, g.y - 2, 4, 4, '#ff4420');
+    }
+  }
+}
+
+function drawExplosions() {
+  explosions = explosions.filter(e => {
+    e.frame++;
+    if (e.frame > e.maxFrame) return false;
+    const t = e.frame / e.maxFrame;
+    const r = 10 + t * 40;
+
+    // Explosion circles
+    ctx.globalAlpha = 1 - t;
+    ctx.fillStyle = PAL.explosion1;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = PAL.explosion2;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = PAL.explosion3;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+
+    // Debris pixels
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2 + e.frame * 0.1;
+      const dist = r * 0.8;
+      const dx = e.x + Math.cos(angle) * dist;
+      const dy = e.y + Math.sin(angle) * dist - e.frame * 0.5;
+      drawPixelRect(dx, dy, 3, 3, PAL.ground);
+    }
+    return true;
+  });
+}
+
+function drawDust() {
+  dustParticles = dustParticles.filter(d => {
+    d.x += d.vx;
+    d.y += d.vy;
+    d.vy += 0.05;
+    d.life--;
+    ctx.globalAlpha = d.life / 60;
+    drawPixelRect(d.x, d.y, d.size, d.size, '#8a7a5a');
+    ctx.globalAlpha = 1;
+    return d.life > 0;
+  });
+}
+
+function drawBackground() {
+  // Ruined buildings in distance
+  ctx.fillStyle = 'rgba(40,30,20,0.5)';
+  // Church ruins
+  drawPixelRect(200, 320, 30, 80, ctx.fillStyle);
+  drawPixelRect(195, 300, 40, 20, ctx.fillStyle);
+  // Steeple
+  ctx.beginPath();
+  ctx.moveTo(215, 280);
+  ctx.lineTo(205, 300);
+  ctx.lineTo(225, 300);
+  ctx.fill();
+  // Cross
+  drawPixelRect(213, 270, 4, 12, ctx.fillStyle);
+  drawPixelRect(209, 276, 12, 3, ctx.fillStyle);
+
+  // Factory
+  drawPixelRect(1100, 310, 60, 90, 'rgba(35,25,15,0.4)');
+  drawPixelRect(1120, 280, 10, 30, 'rgba(35,25,15,0.4)');
+  // Smoke from chimney
+  ctx.fillStyle = 'rgba(60,50,40,0.15)';
+  const tick = gameState?.tick || 0;
+  for (let i = 0; i < 4; i++) {
+    const sy = 270 - i * 20 - (tick * 0.2) % 15;
+    ctx.beginPath();
+    ctx.ellipse(1125 + Math.sin(tick * 0.02 + i) * 5, sy, 8 + i * 4, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Destroyed trees
+  ctx.fillStyle = 'rgba(30,20,10,0.5)';
+  const treePos = [500, 620, 980, 1300];
+  for (const tx of treePos) {
+    drawPixelRect(tx, 360, 4, 40, ctx.fillStyle);
+    // Broken branches
+    drawPixelRect(tx - 6, 365, 8, 3, ctx.fillStyle);
+    drawPixelRect(tx + 2, 355, 6, 2, ctx.fillStyle);
+  }
+}
+
+function drawHUD() {
+  if (!gameState || !myId) return;
+  const me = gameState.players[myId];
+  if (!me) return;
+  
+  const hud = document.getElementById('hudLeft');
+  hud.innerHTML = `HP: ${me.health} | AMMO: ${me.ammo}/30 | 💣${me.grenades} | ${me.weapon.toUpperCase()} | K:${me.kills} D:${me.deaths}`;
+  
+  let enemy = null;
+  for (const pid of Object.keys(gameState.players)) {
+    if (pid !== myId) enemy = gameState.players[pid];
+  }
+  if (enemy) {
+    document.getElementById('hudRight').innerHTML = `ENEMY HP: ${enemy.health} | K:${enemy.kills} D:${enemy.deaths}`;
+  }
+  document.getElementById('hudCenter').textContent = mySide === 'allies' ? '★ ALLIES' : '✠ AXIS';
+}
+
+// ============ GAME LOOP ============
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+  if (!gameActive || !gameState) return;
+
+  // Clear
+  ctx.clearRect(0, 0, 1600, 600);
+
+  // Draw world
+  drawSky();
+  drawBackground();
+  drawGround();
+  drawTrenches();
+  drawBarbedWire();
+
+  // Draw game objects
+  drawProjectiles();
+  drawGrenades();
+  drawExplosions();
+  drawDust();
+
+  // Draw players
+  for (const pid of Object.keys(gameState.players)) {
+    drawSoldier(gameState.players[pid]);
+  }
+
+  // Vignette / fog of war edges
+  const grad = ctx.createLinearGradient(0, 0, 0, 600);
+  grad.addColorStop(0, 'rgba(0,0,0,0.15)');
+  grad.addColorStop(0.5, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.3)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1600, 600);
+
+  // Side vignette
+  const sideGrad = ctx.createLinearGradient(0, 0, 100, 0);
+  sideGrad.addColorStop(0, 'rgba(0,0,0,0.2)');
+  sideGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sideGrad;
+  ctx.fillRect(0, 0, 100, 600);
+  const sideGrad2 = ctx.createLinearGradient(1500, 0, 1600, 0);
+  sideGrad2.addColorStop(0, 'rgba(0,0,0,0)');
+  sideGrad2.addColorStop(1, 'rgba(0,0,0,0.2)');
+  ctx.fillStyle = sideGrad2;
+  ctx.fillRect(1500, 0, 100, 600);
+
+  // Scanline effect (subtle)
+  ctx.fillStyle = 'rgba(0,0,0,0.03)';
+  for (let y = 0; y < 600; y += 3) {
+    ctx.fillRect(0, y, 1600, 1);
+  }
+
+  drawHUD();
+}
+
+gameLoop();
+</script>
+</body>
+</html>
