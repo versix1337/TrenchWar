@@ -227,13 +227,21 @@ async def websocket_handler(request):
                     # Check if already in this session (reconnect)
                     if token in session['clients']:
                         side = client_sides.get(token, 'allies')
-                        await ws.send_str(json.dumps({
-                            'type': 'session_created',
-                            'code': code,
-                            'playerId': token,
-                            'side': side
-                        }))
-                        print(f"[JOIN] {token[:8]} rejoined {code}", flush=True)
+                        if session['state']['started']:
+                            await ws.send_str(json.dumps({
+                                'type': 'game_start',
+                                'state': session['state'],
+                                'playerId': token,
+                                'side': side
+                            }))
+                        else:
+                            await ws.send_str(json.dumps({
+                                'type': 'session_created',
+                                'code': code,
+                                'playerId': token,
+                                'side': side
+                            }))
+                        print(f"[JOIN] {token[:8]} rejoined {code} (started={session['state']['started']})", flush=True)
                         continue
                     
                     if len(session['clients']) >= 2:
@@ -246,15 +254,22 @@ async def websocket_handler(request):
                     client_sessions[token] = code
                     client_sides[token] = 'axis'
                     state['started'] = True
+                    # Send game_start to ALL clients (use fresh WS lookups)
                     for ct in session['clients']:
                         target_ws = client_ws.get(ct)
                         if target_ws and not target_ws.closed:
-                            await target_ws.send_str(json.dumps({
-                                'type': 'game_start',
-                                'state': state,
-                                'playerId': ct,
-                                'side': state['players'][ct]['side']
-                            }))
+                            try:
+                                await target_ws.send_str(json.dumps({
+                                    'type': 'game_start',
+                                    'state': state,
+                                    'playerId': ct,
+                                    'side': state['players'][ct]['side']
+                                }))
+                                print(f"[START] Sent game_start to {ct[:8]}", flush=True)
+                            except Exception as e:
+                                print(f"[START] Failed to send to {ct[:8]}: {e}", flush=True)
+                        else:
+                            print(f"[START] {ct[:8]} WS not available", flush=True)
                     if code not in game_loops:
                         task = asyncio.ensure_future(game_loop(code))
                         game_loops[code] = task
