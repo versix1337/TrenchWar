@@ -61,38 +61,14 @@ def is_in_trench(x, y):
 # Track game loop tasks
 game_loops = {}
 
-def cleanup_session(code):
-    """Remove dead WebSocket player_ids from a session."""
-    session = sessions.get(code)
-    if not session:
-        return
-    alive_ids = []
+def count_alive_players(session):
+    """Count players with live WebSocket connections."""
+    count = 0
     for pid in session['player_ids']:
         ws = player_ws.get(pid)
         if ws and not ws.closed:
-            alive_ids.append(pid)
-        else:
-            # Dead connection — remove from state too
-            if pid in session['state']['players']:
-                del session['state']['players'][pid]
-            if pid in player_sessions:
-                del player_sessions[pid]
-            if pid in player_ws:
-                del player_ws[pid]
-            print(f"[CLEANUP] Removed dead player {pid} from session {code}", flush=True)
-    session['player_ids'] = alive_ids
-    # If session is now empty, delete it
-    if len(alive_ids) == 0:
-        if code in game_loops:
-            game_loops[code].cancel()
-            del game_loops[code]
-        del sessions[code]
-        print(f"[CLEANUP] Deleted empty session {code}", flush=True)
-
-def cleanup_all_sessions():
-    """Clean up all sessions with dead connections."""
-    for code in list(sessions.keys()):
-        cleanup_session(code)
+            count += 1
+    return count
 
 async def broadcast(code, msg):
     session = sessions.get(code)
@@ -252,15 +228,12 @@ async def websocket_handler(request):
                     continue
                 
                 if msg['type'] == 'ping':
-                    # Keepalive — just acknowledge, don't log
                     await ws.send_str(json.dumps({'type': 'pong'}))
                     continue
                 
                 print(f"[MSG] {player_id}: {msg.get('type', '?')}", flush=True)
                 
                 if msg['type'] == 'create_session':
-                    # Clean up any stale sessions first
-                    cleanup_all_sessions()
                     code = gen_code()
                     state = create_game_state()
                     state['players'][player_id] = create_player(player_id, 'allies')
@@ -275,13 +248,13 @@ async def websocket_handler(request):
 
                 elif msg['type'] == 'join_session':
                     code = msg.get('code', '')
-                    # Clean up dead connections in this session before checking
-                    cleanup_session(code)
                     session = sessions.get(code)
                     if not session:
                         await ws.send_str(json.dumps({'type': 'error', 'message': 'Session not found'}))
                         continue
-                    if len(session['player_ids']) >= 2:
+                    alive = count_alive_players(session)
+                    print(f"[JOIN] Session {code}: {len(session['player_ids'])} player_ids, {alive} alive", flush=True)
+                    if alive >= 2:
                         await ws.send_str(json.dumps({'type': 'error', 'message': 'Session is full'}))
                         continue
                     state = session['state']
@@ -305,10 +278,9 @@ async def websocket_handler(request):
                         game_loops[code] = task
 
                 elif msg['type'] == 'find_match':
-                    cleanup_all_sessions()
                     found = False
                     for code, session in sessions.items():
-                        if len(session['player_ids']) == 1 and not session['state']['started']:
+                        if count_alive_players(session) == 1 and not session['state']['started']:
                             await ws.send_str(json.dumps({'type': 'match_found', 'code': code}))
                             found = True
                             break
@@ -454,22 +426,6 @@ async def health_handler(request):
     })
 
 app = web.Application()
-
-async def periodic_cleanup(app):
-    """Background task to clean up stale sessions every 30 seconds."""
-    while True:
-        await asyncio.sleep(30)
-        cleanup_all_sessions()
-
-async def start_background_tasks(app):
-    app['cleanup_task'] = asyncio.ensure_future(periodic_cleanup(app))
-
-async def cleanup_background_tasks(app):
-    app['cleanup_task'].cancel()
-    await app['cleanup_task']
-
-app.on_startup.append(start_background_tasks)
-app.on_cleanup.append(cleanup_background_tasks)
 
 app.router.add_get('/ws', websocket_handler)
 app.router.add_get('/health', health_handler)
