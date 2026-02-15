@@ -1,0 +1,13 @@
+{
+  "name": "trench-war",
+  "version": "1.0.0",
+  "description": "WW2 Pixel Art Trench Warfare - Browser Multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  }
+}

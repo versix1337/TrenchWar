@@ -378,8 +378,12 @@ async def websocket_handler(request):
 async def index_handler(request):
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public', 'index.html'))
 
+async def health_handler(request):
+    return web.json_response({'status': 'ok', 'sessions': len(sessions), 'players': len(player_sessions)})
+
 app = web.Application()
 app.router.add_get('/ws', websocket_handler)
+app.router.add_get('/health', health_handler)
 app.router.add_get('/', index_handler)
 app.router.add_static('/static', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public'))
 

@@ -111,8 +111,22 @@ let mouseDown = false;
 let mouseX = 0, mouseY = 0;
 
 function connect() {
-  ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
-  ws.onopen = () => console.log('Connected to server');
+  const wsUrl = `${wsProtocol}//${location.host}/ws`;
+  console.log('Connecting to:', wsUrl);
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => {
+    console.log('Connected to server');
+    document.getElementById('menuStatus').textContent = 'Connected!';
+    setTimeout(() => {
+      if (document.getElementById('menuStatus').textContent === 'Connected!') {
+        document.getElementById('menuStatus').textContent = '';
+      }
+    }, 1500);
+  };
+  ws.onerror = (e) => {
+    console.error('WebSocket error:', e);
+    document.getElementById('menuStatus').textContent = 'Connection error - retrying...';
+  };
   ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
   ws.onclose = () => {
     gameActive = false;
