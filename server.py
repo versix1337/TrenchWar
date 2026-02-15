@@ -251,6 +251,11 @@ async def websocket_handler(request):
                 except:
                     continue
                 
+                if msg['type'] == 'ping':
+                    # Keepalive — just acknowledge, don't log
+                    await ws.send_str(json.dumps({'type': 'pong'}))
+                    continue
+                
                 print(f"[MSG] {player_id}: {msg.get('type', '?')}", flush=True)
                 
                 if msg['type'] == 'create_session':
